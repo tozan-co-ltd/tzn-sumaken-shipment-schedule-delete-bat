@@ -1,7 +1,7 @@
 ﻿using System.Data.SqlClient;
-using tzn_sumaken_bat.DAL;
+using tzn_sumaken_shipment_schedule_delete_bat.DAL;
 
-class Tzn_sumaken_bat
+class Tzn_sumaken_shipment_schedule_delete_bat
 {
     private static readonly NLog.Logger Logger = NLog.LogManager.GetCurrentClassLogger();
 
@@ -12,7 +12,7 @@ class Tzn_sumaken_bat
     {
         // 二重起動を禁止
         // Mutexを作成する
-        Mutex mutex = new(true, "tzn-sumaken-bat", out bool createdNew);
+        Mutex mutex = new(true, "tzn-sumaken-shipment-schedule-delete-bat", out bool createdNew);
 
         // ログ取得
         Logger.Info($@"三菱出荷指示依頼日時取込バッチ開始");

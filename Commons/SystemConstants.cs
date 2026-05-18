@@ -1,4 +1,4 @@
-﻿namespace tzn_sumaken_bat.Commons
+﻿namespace tzn_sumaken_shipment_schedule_delete_bat.Commons
 {
     public static class SystemConstants
     {

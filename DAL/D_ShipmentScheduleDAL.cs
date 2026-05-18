@@ -1,9 +1,9 @@
 ﻿using Dapper;
 using System.Data.SqlClient;
-using tzn_sumaken_bat.Commons;
-using static tzn_sumaken_bat.Commons.SystemConstants;
+using tzn_sumaken_shipment_schedule_delete_bat.Commons;
+using static tzn_sumaken_shipment_schedule_delete_bat.Commons.SystemConstants;
 
-namespace tzn_sumaken_bat.DAL
+namespace tzn_sumaken_shipment_schedule_delete_bat.DAL
 {
     internal class D_ShipmentScheduleDAL
     {
