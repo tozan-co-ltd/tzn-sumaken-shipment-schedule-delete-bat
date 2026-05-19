@@ -1,220 +1,220 @@
 ﻿using Dapper;
+using NLog;
 using System.Data.SqlClient;
 using tzn_sumaken_shipment_schedule_delete_bat.Commons;
-using static tzn_sumaken_shipment_schedule_delete_bat.Commons.SystemConstants;
 
 namespace tzn_sumaken_shipment_schedule_delete_bat.DAL
 {
     internal class D_ShipmentScheduleDAL
     {
+        private static readonly NLog.Logger Logger = NLog.LogManager.GetCurrentClassLogger();
+
         /// <summary>
-        /// 出荷指示登録
+        /// 出荷指示の取り消し
         /// </summary>
-        public static void ImportShipmentScheduleFromEDI()
+        public static void DeleteShipmentScheduleFromEDI()
         {
             try
             {
-                using var conn = new SqlConnection(
-                    ConnectToSQLServer.GetConnectionString("warehouse"));
+                using var conn = new SqlConnection(ConnectToSQLServer.GetConnectionString("warehouse"));
 
                 conn.Open();
 
-                // データ取得
-                var targets = GetShipmentScheduleTargets(conn);
+                // 取消データ処理
+                var errors = ProcessCancelShipmentSchedule(conn);
 
-                // OKデータ
-                var okList = targets
-                    .Where(x => x.ErrorMessage == null)
-                    .ToList();
-
-                // NGデータ
-                var ngList = targets
-                    .Where(x => x.ErrorMessage != null)
-                    .ToList();
-
-                // 登録
-                var affected = InsertShipmentSchedules(conn, okList);
-
-                Console.WriteLine($"取込件数：{affected}件" + Environment.NewLine);
-
-                if (ngList.Any())
+                if (errors.Any())
                 {
-                    Console.WriteLine($"エラー件数：{ngList.Count}件");
+                    Console.WriteLine("取消処理でエラー発生");
 
-                    // エラーログ出力
-                    OutputErrorLog(ngList);
+                    foreach (var error in errors)
+                    {
+                        Console.WriteLine(error);
+                    }
+                }
+                else
+                {
+                    Console.WriteLine("取消データ処理完了");
                 }
             }
             catch (Exception ex)
             {
                 Console.WriteLine(ex);
+
                 throw;
             }
         }
 
         /// <summary>
-        /// データ取得
+        /// 出荷指示の取り消し
         /// </summary>
         /// <param name="conn"></param>
         /// <returns></returns>
-        private static List<dynamic> GetShipmentScheduleTargets(SqlConnection conn)
+        private static List<string> ProcessCancelShipmentSchedule(
+        SqlConnection conn)
         {
-            var sql = @"
-                SELECT
-                    @DepoID AS DepoID,
+            var errorList = new List<string>();
 
-                    mc.CompanyID,
+            var targets = GetCancelTargets(conn);
 
-                    @DeliveryTimeClass AS DeliveryTimeClass,
+            Logger.Info($"取消対象件数={targets.Count}");
 
-                    CASE
-                        WHEN h.VHJIKO = 'L6'
-                            THEN N'三菱KD工場'
-                        ELSE m.DEKANJ
-                    END AS DeliveryName,
+            if (!targets.Any())
+                return errorList;
 
-                    md.DeliveryCode,
-
-                    md.DeliveryFactoryKubun,
-
-                    e.VINONO AS DeliverySlipNumber,
-
-                    e.VIBUNM AS DeliveryProductName,
-
-                    e.VIBUNO AS DeliveryProductNumber,
-
-                    e.VIBUNO AS SupplierProductNumber,
-
-                    e.VISRYO AS Quantity,
-
-                    ISNULL(
-                        CEILING(
-                            CAST(e.VISRYO AS DECIMAL(18, 2))
-                            / NULLIF(p.LotQuantity, 0)
-                        ),
-                        0
-                    ) AS NumberOfBoxes,
-
-                    h.VHNOBA AS DeliveryFactoryName,
-
-                    e.VIDATE AS DeliveryDate,
-
-                    h.VHJIKO AS DeliveryLocation,
-
-                    p.LotQuantity,
-
-                    GETDATE() AS IssuedDate,
-
-                    e.TorokuDateTime AS CreatedAt,
-
-                    e.KosinUserId AS CreatedBy,
-
-                    GETDATE() AS UpdatedAt,
-
-                    e.KosinUserId AS UpdatedBy,
-
-                    CASE
-                        WHEN mc.CompanyID IS NULL
-                            THEN N'Companyマスタ不一致'
-
-                        WHEN md.DeliveryCode IS NULL
-                            THEN N'Deliveryマスタ不一致'
-
-                        WHEN p.LotQuantity IS NULL
-                            THEN N'Productマスタ不一致'
-
-                        WHEN p.LotQuantity = 0
-                            THEN N'LotQuantityが0'
-
-                        ELSE NULL
-                    END AS ErrorMessage
-
-                FROM tozandbEDI.dbo.EDI_VI_nohin_meisai e
-
-                INNER JOIN tozandbEDI.dbo.EDI_VH_nohin_header h
-                    ON  e.VINOKU = h.VHNOKU
-                    AND e.VINOSE = h.VHNOSE
-                    AND e.VINONO = h.VHNONO
-
-                LEFT JOIN tozandbEDI.dbo.BU_DE_UNYname_master m
-                    ON m.DEMECD = h.VHJIKO
-
-                LEFT JOIN M_Company mc
-                    ON mc.CompanyName =
-                        CASE
-                            WHEN h.VHNOSE IN ('T', 'B', 'M', 'N')
-                                THEN N'三菱ふそう'
-                            ELSE N'三菱自動車'
-                        END
-                    AND mc.IsDeleted = 0
-
-                LEFT JOIN M_Delivery md
-                    ON  md.CompanyID = mc.CompanyID
-                    AND md.DeliveryName =
-                        CASE
-                            WHEN h.VHJIKO = 'L6'
-                                THEN N'三菱KD工場'
-                            ELSE m.DEKANJ
-                        END
-                    AND md.DeliveryFactoryName = h.VHNOBA
-                    AND md.IsDeleted = 0
-
-                LEFT JOIN M_Product p
-                    ON  p.SupplierProductNumber = e.VIBUNO
-                    AND p.CompanyID = mc.CompanyID
-                    AND p.IsDeleted = 0
-
-                WHERE
-                    e.VITRCD = 'J019'
-
-                    AND e.TorokuDateTime >= DATEADD(DAY, -2, GETDATE())
-
-                    AND NOT EXISTS
-                    (
-                        SELECT 1
-                        FROM D_ShipmentSchedule d
-                        WHERE d.DeliverySlipNumber = e.VINONO
-                    )
-            ";
-
-            return conn.Query<dynamic>(sql, new
+            foreach (var target in targets)
             {
-                DepoID = Mitsubishi.DepoID,
-                DeliveryTimeClass = Mitsubishi.DeliveryTimeClass
-            }).ToList();
+                using var tran = conn.BeginTransaction();
+
+                try
+                {
+                    Logger.Info(
+                        $"取消処理開始 ShipmentScheduleID={target.ShipmentScheduleID}");
+
+                    // TransportShippingLaneResultに存在確認
+                    bool existsTransportResult =
+                        ExistsTransportShippingLaneResult(conn, tran, target);
+
+                    // ある場合LotShipmentSequence更新, DeleteTransportShippingLaneResult取消
+                    if (existsTransportResult)
+                    {
+                        UpdateLotShipmentSequence(conn, tran, target);
+
+                        DeleteTransportShippingLaneResult(conn, tran, target);
+                    }
+
+                    // 関連のデータを削除
+                    DeleteShipmentRelatedData(conn, tran, target.ShipmentScheduleID);
+
+                    tran.Commit();
+
+                    Logger.Info(
+                        $"取消処理完了 ShipmentScheduleID={target.ShipmentScheduleID}");
+                }
+                catch (Exception ex)
+                {
+                    tran.Rollback();
+
+                    string error = $"ShipmentScheduleID={target.ShipmentScheduleID} : {ex.Message}";
+
+                    errorList.Add(error);
+
+                    Logger.Error(error);
+
+                    Logger.Error(ex.ToString());
+                }
+            }
+
+            return errorList;
         }
 
         /// <summary>
-        /// 登録
+        /// 出荷指示の除対象を取得
         /// </summary>
         /// <param name="conn"></param>
-        /// <param name="targets"></param>
         /// <returns></returns>
-        private static int InsertShipmentSchedules(SqlConnection conn, List<dynamic> targets)
+        private static List<dynamic> GetCancelTargets(SqlConnection conn)
         {
-            if (!targets.Any())
-                return 0;
-
             var sql = @"
-                INSERT INTO D_ShipmentSchedule
+                SELECT DISTINCT ss.*
+                FROM D_ShipmentSchedule ss
+
+                INNER JOIN tozandbEDI.dbo.BU_VR_NohinshoTorikeshiData_d vr
+                    ON  vr.VRNONO = ss.DeliverySlipNumber
+                    AND vr.VRBUNO = ss.SupplierProductNumber
+                    AND vr.VRSRYO = ss.Quantity
+                    AND CONVERT(date, vr.VRDATE) = CONVERT(date, ss.DeliveryDate)
+
+                WHERE vr.VRTRCD = 'J019'
+                  AND vr.TorokuDateTime >= DATEADD(DAY, -2, GETDATE())
+            ";
+
+            return conn.Query<dynamic>(sql).ToList();
+        }
+
+        /// <summary>
+        /// 出荷レーン搬送存在確認
+        /// </summary>
+        /// <param name="conn"></param>
+        /// <param name="tran"></param>
+        /// <param name="target"></param>
+        /// <returns></returns>
+        private static bool ExistsTransportShippingLaneResult(
+        SqlConnection conn,
+        SqlTransaction tran,
+        dynamic target)
+        {
+            var sql = @"
+                SELECT COUNT(1)
+                FROM D_TransportShippingLaneResult
+                WHERE DeliveryCode = @DeliveryCode
+                    AND DeliveryDate = @DeliveryDate
+                    AND DeliverySlipNumber = @DeliverySlipNumber
+            ";
+
+            return conn.ExecuteScalar<int>(
+                sql,
+                new
+                {
+                    target.DeliveryCode,
+                    target.DeliveryDate,
+                    target.DeliverySlipNumber
+                },
+                tran) > 0;
+        }
+
+        /// <summary>
+        /// ロット順更新、ロット追加
+        /// </summary>
+        /// <param name="conn"></param>
+        /// <param name="tran"></param>
+        /// <param name="target"></param>
+        private static void UpdateLotShipmentSequence(
+        SqlConnection conn,
+        SqlTransaction tran,
+        dynamic target)
+        {
+            // PrepareShipmentResultからLot取得
+            var lotNumber = conn.QueryFirstOrDefault<string>(
+                @"
+                SELECT TOP 1 LotNumber
+                FROM D_PrepareShipmentResult
+                WHERE ShipmentScheduleID = @ShipmentScheduleID
+                ",
+                new
+                {
+                    target.ShipmentScheduleID
+                },
+                tran);
+
+            if (string.IsNullOrEmpty(lotNumber))
+                return;
+
+            // 現在のsequenceを全部 +1
+            conn.Execute(
+                @"
+                UPDATE D_LotShipmentSequence
+                SET LotShipmentSequence = LotShipmentSequence + 1,
+                    UpdatedAt = GETDATE()
+                WHERE SupplierProductNumber = @SupplierProductNumber
+                ",
+                new
+                {
+                    target.SupplierProductNumber
+                },
+                tran);
+
+            // 削除されていたLotを先頭に戻す
+            conn.Execute(
+                @"
+                INSERT INTO D_LotShipmentSequence
                 (
                     DepoID,
                     CompanyID,
-                    DeliveryTimeClass,
-                    DeliveryName,
-                    DeliveryCode,
-                    DeliveryFactoryKubun,
-                    DeliverySlipNumber,
-                    DeliveryProductName,
-                    DeliveryProductNumber,
                     SupplierProductNumber,
-                    Quantity,
-                    NumberOfBoxes,
-                    DeliveryFactoryName,
-                    DeliveryDate,
-                    DeliveryLocation,
-                    LotQuantity,
-                    IssuedDate,
+                    LotShipmentSequence,
+                    LotNumber,
+                    IsDeleted,
                     CreatedAt,
                     CreatedBy,
                     UpdatedAt,
@@ -224,43 +224,100 @@ namespace tzn_sumaken_shipment_schedule_delete_bat.DAL
                 (
                     @DepoID,
                     @CompanyID,
-                    @DeliveryTimeClass,
-                    @DeliveryName,
-                    @DeliveryCode,
-                    @DeliveryFactoryKubun,
-                    @DeliverySlipNumber,
-                    @DeliveryProductName,
-                    @DeliveryProductNumber,
                     @SupplierProductNumber,
-                    @Quantity,
-                    @NumberOfBoxes,
-                    @DeliveryFactoryName,
-                    @DeliveryDate,
-                    @DeliveryLocation,
-                    @LotQuantity,
-                    @IssuedDate,
-                    @CreatedAt,
-                    @CreatedBy,
-                    @UpdatedAt,
+                    1,
+                    @LotNumber,
+                    0,
+                    GETDATE(),
+                    @UpdatedBy,
+                    GETDATE(),
                     @UpdatedBy
                 )
-            ";
-
-            return conn.Execute(sql, targets);
+                ",
+                new
+                {
+                    target.DepoID,
+                    target.CompanyID,
+                    target.SupplierProductNumber,
+                    LotNumber = lotNumber,
+                    target.UpdatedBy
+                },
+                tran);
         }
 
         /// <summary>
-        /// エラーログ
+        /// 関連のデータを削除
         /// </summary>
-        /// <param name="ngList"></param>
-        private static void OutputErrorLog(List<dynamic> ngList)
+        /// <param name="conn"></param>
+        /// <param name="tran"></param>
+        /// <param name="shipmentScheduleID"></param>
+        private static void DeleteShipmentRelatedData(
+        SqlConnection conn,
+        SqlTransaction tran,
+        int shipmentScheduleID)
         {
-            for (int i = 0; i < ngList.Count; i++)
-            {
-                var ng = ngList[i];
+            // MatchKanbanResult
+            conn.Execute(
+                @"
+                DELETE FROM D_MatchKanbanResult
+                WHERE ShipmentScheduleID = @ShipmentScheduleID
+                ",
+                new { ShipmentScheduleID = shipmentScheduleID },
+                tran);
 
-                Console.WriteLine($"{i + 1}. NG: 納品書番号 : {ng.DeliverySlipNumber}　エラー：{ng.ErrorMessage}");
-            }
+            // InspectProductResult
+            conn.Execute(
+                @"
+                DELETE FROM D_InspectProductResult
+                WHERE ShipmentScheduleID = @ShipmentScheduleID
+                ",
+                new { ShipmentScheduleID = shipmentScheduleID },
+                tran);
+
+            // PrepareShipmentResult
+            conn.Execute(
+                @"
+                DELETE FROM D_PrepareShipmentResult
+                WHERE ShipmentScheduleID = @ShipmentScheduleID
+                ",
+                new { ShipmentScheduleID = shipmentScheduleID },
+                tran);
+
+            // ShipmentSchedule
+            conn.Execute(
+                @"
+                DELETE FROM D_ShipmentSchedule
+                WHERE ShipmentScheduleID = @ShipmentScheduleID
+                ",
+                new { ShipmentScheduleID = shipmentScheduleID },
+                tran);
+        }
+
+        /// <summary>
+        /// 出荷レーン搬送削除
+        /// </summary>
+        /// <param name="conn"></param>
+        /// <param name="tran"></param>
+        /// <param name="target"></param>
+        private static void DeleteTransportShippingLaneResult(
+        SqlConnection conn,
+        SqlTransaction tran,
+        dynamic target)
+        {
+            conn.Execute(
+                @"
+                DELETE FROM D_TransportShippingLaneResult
+                WHERE DeliveryCode = @DeliveryCode
+                    AND DeliveryDate = @DeliveryDate
+                    AND DeliverySlipNumber = @DeliverySlipNumber
+                ",
+                new
+                {
+                    target.DeliveryCode,
+                    target.DeliveryDate,
+                    target.DeliverySlipNumber
+                },
+                tran);
         }
     }
 }

@@ -6,7 +6,7 @@ class Tzn_sumaken_shipment_schedule_delete_bat
     private static readonly NLog.Logger Logger = NLog.LogManager.GetCurrentClassLogger();
 
     /// <summary>
-    /// 三菱出荷指示依頼日時取込バッチ
+    /// 出荷指示の取消バッチ
     /// </summary>
     static void Main()
     {
@@ -15,7 +15,7 @@ class Tzn_sumaken_shipment_schedule_delete_bat
         Mutex mutex = new(true, "tzn-sumaken-shipment-schedule-delete-bat", out bool createdNew);
 
         // ログ取得
-        Logger.Info($@"三菱出荷指示依頼日時取込バッチ開始");
+        Logger.Info($@"出荷指示の取消バッチ開始");
 
         try
         {
@@ -27,7 +27,7 @@ class Tzn_sumaken_shipment_schedule_delete_bat
                 return;
             }
             // SQL実行
-            D_ShipmentScheduleDAL.ImportShipmentScheduleFromEDI();
+            D_ShipmentScheduleDAL.DeleteShipmentScheduleFromEDI();
         }
         catch (SqlException ex)
         {
@@ -47,7 +47,7 @@ class Tzn_sumaken_shipment_schedule_delete_bat
             mutex.ReleaseMutex();
         }
         // ログ取得
-        Logger.Info($@"三菱出荷指示依頼日時取込バッチ終了 完了日時:{DateTime.Now}");
+        Logger.Info($@"出荷指示の取消バッチ終了 完了日時:{DateTime.Now}");
 
 # if DEBUG
         Console.WriteLine("キーを押して下さい");
