@@ -16,7 +16,8 @@ namespace tzn_sumaken_shipment_schedule_delete_bat.DAL
         {
             try
             {
-                using var conn = new SqlConnection(ConnectToSQLServer.GetConnectionString("warehouse"));
+                using var conn = new SqlConnection(
+                    ConnectToSQLServer.GetConnectionString("warehouse"));
 
                 conn.Open();
 
@@ -51,7 +52,7 @@ namespace tzn_sumaken_shipment_schedule_delete_bat.DAL
         /// <param name="conn"></param>
         /// <returns></returns>
         private static List<string> ProcessCancelShipmentSchedule(
-        SqlConnection conn)
+            SqlConnection conn)
         {
             var errorList = new List<string>();
 
@@ -68,22 +69,22 @@ namespace tzn_sumaken_shipment_schedule_delete_bat.DAL
 
                 try
                 {
-                    Logger.Info(
-                        $"取消処理開始 ShipmentScheduleID={target.ShipmentScheduleID}");
+                    Logger.Info($"取消処理開始 ShipmentScheduleID={target.ShipmentScheduleID}");
 
-                    // TransportShippingLaneResultに存在確認
-                    bool existsTransportResult =
-                        ExistsTransportShippingLaneResult(conn, tran, target);
+                    // LotNumber取得
+                    var lotNumber = GetLotNumber(conn, tran, target.ShipmentScheduleID);
 
-                    // ある場合LotShipmentSequence更新, DeleteTransportShippingLaneResult取消
-                    if (existsTransportResult)
-                    {
-                        UpdateLotShipmentSequence(conn, tran, target);
+                    // 出荷レーン搬送削除
+                    var deletedTransportCount = DeleteTransportShippingLaneResult(conn, tran, target);
 
-                        DeleteTransportShippingLaneResult(conn, tran, target);
-                    }
+                    // 搬送データが存在した場合のみロット順更新
+                    if (deletedTransportCount > 0)
+                        UpdateLotShipmentSequence(conn, tran, target, lotNumber);
 
-                    // 関連のデータを削除
+                    // StoreOut削除
+                    DeleteStoreOut(conn, tran, target, lotNumber);
+
+                    // 関連データ削除
                     DeleteShipmentRelatedData(conn, tran, target.ShipmentScheduleID);
 
                     tran.Commit();
@@ -95,7 +96,8 @@ namespace tzn_sumaken_shipment_schedule_delete_bat.DAL
                 {
                     tran.Rollback();
 
-                    string error = $"ShipmentScheduleID={target.ShipmentScheduleID} : {ex.Message}";
+                    string error =
+                        $"ShipmentScheduleID={target.ShipmentScheduleID} : {ex.Message}";
 
                     errorList.Add(error);
 
@@ -109,7 +111,7 @@ namespace tzn_sumaken_shipment_schedule_delete_bat.DAL
         }
 
         /// <summary>
-        /// 出荷指示の除対象を取得
+        /// 出荷指示の取消対象取得
         /// </summary>
         /// <param name="conn"></param>
         /// <returns></returns>
@@ -133,49 +135,18 @@ namespace tzn_sumaken_shipment_schedule_delete_bat.DAL
         }
 
         /// <summary>
-        /// 出荷レーン搬送存在確認
+        /// LotNumber取得
         /// </summary>
         /// <param name="conn"></param>
         /// <param name="tran"></param>
-        /// <param name="target"></param>
+        /// <param name="shipmentScheduleID"></param>
         /// <returns></returns>
-        private static bool ExistsTransportShippingLaneResult(
-        SqlConnection conn,
-        SqlTransaction tran,
-        dynamic target)
+        private static string GetLotNumber(
+            SqlConnection conn,
+            SqlTransaction tran,
+            int shipmentScheduleID)
         {
-            var sql = @"
-                SELECT COUNT(1)
-                FROM D_TransportShippingLaneResult
-                WHERE DeliveryCode = @DeliveryCode
-                    AND DeliveryDate = @DeliveryDate
-                    AND DeliverySlipNumber = @DeliverySlipNumber
-            ";
-
-            return conn.ExecuteScalar<int>(
-                sql,
-                new
-                {
-                    target.DeliveryCode,
-                    target.DeliveryDate,
-                    target.DeliverySlipNumber
-                },
-                tran) > 0;
-        }
-
-        /// <summary>
-        /// ロット順更新、ロット追加
-        /// </summary>
-        /// <param name="conn"></param>
-        /// <param name="tran"></param>
-        /// <param name="target"></param>
-        private static void UpdateLotShipmentSequence(
-        SqlConnection conn,
-        SqlTransaction tran,
-        dynamic target)
-        {
-            // PrepareShipmentResultからLot取得
-            var lotNumber = conn.QueryFirstOrDefault<string>(
+            return conn.QueryFirstOrDefault<string>(
                 @"
                 SELECT TOP 1 LotNumber
                 FROM D_PrepareShipmentResult
@@ -183,10 +154,24 @@ namespace tzn_sumaken_shipment_schedule_delete_bat.DAL
                 ",
                 new
                 {
-                    target.ShipmentScheduleID
+                    ShipmentScheduleID = shipmentScheduleID
                 },
                 tran);
+        }
 
+        /// <summary>
+        /// ロット順更新
+        /// </summary>
+        /// <param name="conn"></param>
+        /// <param name="tran"></param>
+        /// <param name="target"></param>
+        /// <param name="lotNumber"></param>
+        private static void UpdateLotShipmentSequence(
+            SqlConnection conn,
+            SqlTransaction tran,
+            dynamic target,
+            string lotNumber)
+        {
             if (string.IsNullOrEmpty(lotNumber))
                 return;
 
@@ -246,50 +231,70 @@ namespace tzn_sumaken_shipment_schedule_delete_bat.DAL
         }
 
         /// <summary>
-        /// 関連のデータを削除
+        /// 出庫削除
+        /// </summary>
+        /// <param name="conn"></param>
+        /// <param name="tran"></param>
+        /// <param name="target"></param>
+        /// <param name="lotNumber"></param>
+        private static void DeleteStoreOut(
+            SqlConnection conn,
+            SqlTransaction tran,
+            dynamic target,
+            string lotNumber)
+        {
+            if (string.IsNullOrEmpty(lotNumber))
+                return;
+
+            conn.Execute(
+                @"
+                DELETE FROM D_StoreOut
+                WHERE DeliveryDate = @DeliveryDate
+                  AND DeliverySlipNumber = @DeliverySlipNumber
+                  AND DeliveryProductNumber = @DeliveryProductNumber
+                  AND SupplierProductNumber = @SupplierProductNumber
+                  AND LotNumber = @LotNumber
+                ",
+                new
+                {
+                    target.DeliveryDate,
+                    target.DeliverySlipNumber,
+                    target.DeliveryProductNumber,
+                    target.SupplierProductNumber,
+                    LotNumber = lotNumber
+                },
+                tran);
+        }
+
+        /// <summary>
+        /// 関連データ削除
         /// </summary>
         /// <param name="conn"></param>
         /// <param name="tran"></param>
         /// <param name="shipmentScheduleID"></param>
         private static void DeleteShipmentRelatedData(
-        SqlConnection conn,
-        SqlTransaction tran,
-        int shipmentScheduleID)
+            SqlConnection conn,
+            SqlTransaction tran,
+            int shipmentScheduleID)
         {
-            // MatchKanbanResult
             conn.Execute(
                 @"
                 DELETE FROM D_MatchKanbanResult
-                WHERE ShipmentScheduleID = @ShipmentScheduleID
-                ",
-                new { ShipmentScheduleID = shipmentScheduleID },
-                tran);
+                WHERE ShipmentScheduleID = @ShipmentScheduleID;
 
-            // InspectProductResult
-            conn.Execute(
-                @"
                 DELETE FROM D_InspectProductResult
-                WHERE ShipmentScheduleID = @ShipmentScheduleID
-                ",
-                new { ShipmentScheduleID = shipmentScheduleID },
-                tran);
+                WHERE ShipmentScheduleID = @ShipmentScheduleID;
 
-            // PrepareShipmentResult
-            conn.Execute(
-                @"
                 DELETE FROM D_PrepareShipmentResult
-                WHERE ShipmentScheduleID = @ShipmentScheduleID
-                ",
-                new { ShipmentScheduleID = shipmentScheduleID },
-                tran);
+                WHERE ShipmentScheduleID = @ShipmentScheduleID;
 
-            // ShipmentSchedule
-            conn.Execute(
-                @"
                 DELETE FROM D_ShipmentSchedule
-                WHERE ShipmentScheduleID = @ShipmentScheduleID
+                WHERE ShipmentScheduleID = @ShipmentScheduleID;
                 ",
-                new { ShipmentScheduleID = shipmentScheduleID },
+                new
+                {
+                    ShipmentScheduleID = shipmentScheduleID
+                },
                 tran);
         }
 
@@ -299,17 +304,18 @@ namespace tzn_sumaken_shipment_schedule_delete_bat.DAL
         /// <param name="conn"></param>
         /// <param name="tran"></param>
         /// <param name="target"></param>
-        private static void DeleteTransportShippingLaneResult(
-        SqlConnection conn,
-        SqlTransaction tran,
-        dynamic target)
+        /// <returns></returns>
+        private static int DeleteTransportShippingLaneResult(
+            SqlConnection conn,
+            SqlTransaction tran,
+            dynamic target)
         {
-            conn.Execute(
+            return conn.Execute(
                 @"
                 DELETE FROM D_TransportShippingLaneResult
                 WHERE DeliveryCode = @DeliveryCode
-                    AND DeliveryDate = @DeliveryDate
-                    AND DeliverySlipNumber = @DeliverySlipNumber
+                  AND DeliveryDate = @DeliveryDate
+                  AND DeliverySlipNumber = @DeliverySlipNumber
                 ",
                 new
                 {
