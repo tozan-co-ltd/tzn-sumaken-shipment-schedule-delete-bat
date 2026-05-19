@@ -1,6 +1,6 @@
 ﻿using Microsoft.Extensions.Configuration;
 
-namespace tzn_sumaken_bat.Commons
+namespace tzn_sumaken_shipment_schedule_delete_bat.Commons
 {
     /// <summary>
     /// SQLServer接続に関する関数
