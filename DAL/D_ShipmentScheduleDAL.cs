@@ -290,6 +290,9 @@ namespace tzn_sumaken_shipment_schedule_delete_bat.DAL
 
                 DELETE FROM D_ShipmentSchedule
                 WHERE ShipmentScheduleID = @ShipmentScheduleID;
+
+                DELETE FROM D_Shipment
+                WHERE ShipmentScheduleID = @ShipmentScheduleID;
                 ",
                 new
                 {
