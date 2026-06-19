@@ -150,7 +150,7 @@ namespace tzn_sumaken_shipment_schedule_delete_bat.DAL
                 @"
                 SELECT TOP 1 LotNumber
                 FROM D_PrepareShipmentResult
-                WHERE ShipmentScheduleID = @ShipmentScheduleID order by PrepareShipmentResultID desc
+                WHERE ShipmentScheduleID = @ShipmentScheduleID order by PrepareShipmentResultID asc
                 ",
                 new
                 {
